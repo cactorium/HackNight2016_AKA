@@ -1,13 +1,31 @@
 package com.integration.clarifai.yummifai;
 
+import android.Manifest;
+import android.content.Context;
 import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.graphics.ImageFormat;
+import android.hardware.Camera;
+import android.hardware.camera2.CameraAccessException;
+import android.hardware.camera2.CameraCaptureSession;
+import android.hardware.camera2.CameraCharacteristics;
+import android.hardware.camera2.CameraDevice;
+import android.hardware.camera2.CameraManager;
+import android.hardware.camera2.CameraMetadata;
+import android.hardware.camera2.CaptureRequest;
+import android.hardware.camera2.TotalCaptureResult;
+import android.hardware.camera2.params.StreamConfigurationMap;
+import android.media.ImageReader;
 import android.os.AsyncTask;
 import android.provider.MediaStore;
+import android.support.v4.app.ActivityCompat;
 import android.support.v7.app.AppCompatActivity;
 import android.os.Bundle;
 import android.util.Log;
+import android.util.Size;
+import android.view.Surface;
 import android.view.View;
 import android.widget.AdapterView;
 import android.widget.ArrayAdapter;
@@ -26,14 +44,15 @@ import com.clarifai.api.RecognitionResult;
 import com.clarifai.api.Tag;
 
 
-
 import java.io.ByteArrayOutputStream;
 import java.io.FileNotFoundException;
 import java.io.InputStream;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
 
 
-public class MainActivity extends AppCompatActivity{
+public class MainActivity extends AppCompatActivity {
     private static final int CAPTURE_IMAGE_ACTIVITY_REQUEST_CODE = 100;
     private static final int GALLERY_IMAGE_ACTIVITY_REQUEST_CODE = 200;
     private static final String TAG = MainActivity.class.getSimpleName();
@@ -45,6 +64,66 @@ public class MainActivity extends AppCompatActivity{
     private ImageButton cameraButton;
     private ImageButton galleryButton;
     private ArrayList<String> items = new ArrayList<>();
+    private ImageReader imageReader = null;
+
+    private CameraDevice.StateCallback cameraCallback = new CameraDevice.StateCallback() {
+        @Override
+        public void onOpened(CameraDevice cameraDevice) {
+            Log.d(TAG, "camera opened");
+            if (imageReader == null) {
+                Log.d(TAG, "image reader is not configured!!");
+                return;
+            }
+            List<Surface> surfaces = Arrays.asList(new Surface[] { imageReader.getSurface() });
+            try {
+                cameraDevice.createCaptureSession(surfaces, cameraSessionCallback, null);
+            } catch (CameraAccessException e) {
+                e.printStackTrace();
+            }
+        }
+
+        @Override
+        public void onDisconnected(CameraDevice cameraDevice) {
+
+        }
+
+        @Override
+        public void onError(CameraDevice cameraDevice, int i) {
+
+        }
+    };
+
+    private CameraCaptureSession.StateCallback cameraSessionCallback = new CameraCaptureSession.StateCallback() {
+        @Override
+        public void onConfigured(CameraCaptureSession cameraCaptureSession) {
+            CaptureRequest captureRequest = null;
+            try {
+                captureRequest = cameraCaptureSession.getDevice().createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE).build();
+                cameraCaptureSession.setRepeatingRequest(captureRequest, captureListener, null);
+            } catch (CameraAccessException e) {
+                e.printStackTrace();
+                return;
+            }
+
+        }
+
+        @Override
+        public void onConfigureFailed(CameraCaptureSession cameraCaptureSession) {
+
+        }
+    };
+
+    private CameraCaptureSession.CaptureCallback captureListener = new CameraCaptureSession.CaptureCallback() {
+        @Override
+        public void onCaptureStarted(CameraCaptureSession session, CaptureRequest request, long timestamp, long frameNumber) {
+            super.onCaptureStarted(session, request, timestamp, frameNumber);
+        }
+
+        @Override
+        public void onCaptureCompleted(CameraCaptureSession session, CaptureRequest request, TotalCaptureResult result) {
+            
+        }
+    };
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -53,6 +132,64 @@ public class MainActivity extends AppCompatActivity{
         getViews();
         handleCameraBtnClick();
         handleGalleryBtnClick();
+
+        CameraManager cameraManager = (CameraManager) getSystemService(Context.CAMERA_SERVICE);
+        try {
+            String backCameraId = "";
+            String[] cameraList = cameraManager.getCameraIdList();
+            for (String cameraId : cameraList) {
+                CameraCharacteristics cameraCharacteristics = cameraManager.getCameraCharacteristics(cameraId);
+                if (CameraMetadata.LENS_FACING_BACK == cameraCharacteristics.get(CameraCharacteristics.LENS_FACING)) {
+                    Log.d(TAG, "backCameraId = " + cameraId);
+                    StreamConfigurationMap configs = cameraCharacteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP);
+                    int [] formats = configs.getOutputFormats();
+                    int [] wantedFormats  = new int[] {
+                            ImageFormat.JPEG
+                    };
+                    for (int format: formats) {
+                        boolean isWanted = false;
+                        for (int wantedFormat: wantedFormats) {
+                            if (wantedFormat == format) {
+                                isWanted = true;
+                                break;
+                            }
+                        }
+                        if (isWanted){
+                            Size[] sizes = configs.getHighResolutionOutputSizes(format);
+                            if (sizes == null || sizes.length == 0)
+                                continue;
+                            Size maxSize = null;
+                            for (Size size: sizes) {
+                                if (maxSize == null || ((maxSize.getHeight() < size.getHeight()) && (maxSize.getWidth() < size.getWidth())))
+                                    maxSize = size;
+                            }
+                            if (maxSize == null)
+                                continue;
+                            imageReader = ImageReader.newInstance(maxSize.getWidth(), maxSize.getHeight(), format, 20);
+
+                        }
+                    }
+
+
+                    backCameraId = cameraId;
+                    break;
+                }
+            }
+
+            if (ActivityCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+                // TODO: Consider calling
+                //    ActivityCompat#requestPermissions
+                // here to request the missing permissions, and then overriding
+                //   public void onRequestPermissionsResult(int requestCode, String[] permissions,
+                //                                          int[] grantResults)
+                // to handle the case where the user grants the permission. See the documentation
+                // for ActivityCompat#requestPermissions for more details.
+                return;
+            }
+            cameraManager.openCamera(backCameraId, cameraCallback, null);
+        } catch (CameraAccessException e) {
+            e.printStackTrace();
+        }
     }
 
     public void getViews(){
